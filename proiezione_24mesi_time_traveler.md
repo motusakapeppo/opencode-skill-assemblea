@@ -60,7 +60,7 @@
 - Se nessuno implementa auto-trigger, il 60% delle richieste dell'utente viene gestito da Sisyphus-junior generico anziché dallo skill specialistica più adatta. L'utente dice "salva tutto" e Sisyphus fa un `git add -A` a mano invece di usare `git-warfare`. **Degradamento esperienza progressivo.**
 
 **Cascata 3 — Hardcoded Key diventa Minaccia di Sicurezza**
-- `debate_orchestrator.py` contiene una API key (`b46bc05b...`) hardcoded in chiaro. Se il file viene caricato su GitHub per sbaglio (e l'utente usa "salva tutto"), quella chiave è compromessa. **A 6 mesi il rischio di leak è elevato** perché il fallback viene usato sempre più spesso (la logica principale OpenCode potrebbe non funzionare con nuovi modelli).
+- `debate_orchestrator.py` conteneva una API key hardcoded in chiaro. Se il file veniva caricato su GitHub per sbaglio, quella chiave era compromessa. **A 6 mesi il rischio di leak era elevato** perché il fallback veniva usato sempre più spesso (la logica principale OpenCode potrebbe non funzionare con nuovi modelli). **Risolto**: ora la key si legge da `OLLAMA_API_KEY` env var.
 
 ### 🕛 Tra 12 mesi (Maggio 2027)
 
