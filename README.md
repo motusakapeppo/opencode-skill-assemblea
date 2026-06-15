@@ -2,15 +2,46 @@
 
 **Assemblea V5 — Intelligent Hybrid Debate Engine**
 
-Un sistema multi-agente asimmetrico per dibattiti strutturati tra modelli AI, progettato per funzionare come skill su OpenCode (OhMyOpenCode). L'Assemblea convoca 4-6 personaggi con modelli e ruoli diversi, genera proposte parallele, le sottopone a critica, e produce un verbale finale con decisione architetturale.
-
-> Questa skill è **nativamente pensata per OpenCode**: il metodo principale d'esecuzione è via sub-agenti cloud. Lo script Python `debate_orchestrator.py` è un **fallback** per ambienti senza OpenCode.
+Multi-agente asimmetrico per dibattiti strutturati tra modelli AI su OpenCode. Convoca 4-6 personaggi con modelli e ruoli diversi, genera proposte parallele, le sottopone a critica con l'Avvocato del Diavolo, e produce un verbale finale con decisione architettu­rale.
 
 ---
 
-## Architettura
+## Indice
 
-### Il Cast
+- [Quick Start](#quick-start)
+- [Il Cast](#il-cast)
+- [Come Funziona](#come-funziona)
+- [Triage e Modalità](#triage-e-modalità)
+- [Moduli Specialistici](#moduli-specialistici)
+- [Memoria Storica](#memoria-storica-rag)
+- [Metriche di Chiusura](#metriche-di-chiusura)
+- [Quando Usarla](#quando-usarla)
+- [Esempi](#esempi)
+- [Fallback Python](#fallback-python)
+- [Requisiti](#requisiti)
+- [Limitazioni](#limitazioni)
+
+---
+
+## Quick Start
+
+Invocazione su OpenCode (OhMyOpenCode):
+
+```
+Assemblea: progetta un'architettura per il nuovo sistema di logging
+```
+```
+Dibattito: usiamo PostgreSQL o MongoDB per la nuova piattaforma?
+```
+```
+Brainstorming: come riscrivere da zero il sistema di routing?
+```
+
+L'Assemblea analizza automaticamente la complessità del problema, seleziona la modalità appropriata (Light/Standard/Full/Esplorazione), convoca i personaggi necessari e produce un verbale strutturato.
+
+---
+
+## Il Cast
 
 | Ruolo | Modello | Categoria | Competenza |
 |-------|---------|-----------|------------|
@@ -21,6 +52,26 @@ Un sistema multi-agente asimmetrico per dibattiti strutturati tra modelli AI, pr
 | **L'Avvocato del Diavolo** | deepseek-v4-flash | `ultrabrain` | Critica puntuale, anti-sycophancy |
 | **Lead Architect** | deepseek-v4-flash | `ultrabrain` | Sintesi finale e verbale |
 
+### Mappa Modelli
+
+| Modello | Contesto | Assegnato a |
+|---------|----------|-------------|
+| kimi-k2.7-code | 256K token | Hacker — coding specialist |
+| minimax-m3 | 1M token | Contabile, Utente — analitico |
+| deepseek-v4-flash | 1M token | Avvocato, Lead Architect |
+| deepseek-v4-pro | 1M token | ❌ **MAI in assemblea** (cold start 5-10s) |
+
+### Regole Ferree
+
+- **MAI** delegare modelli locali a dibattiti — non sanno farlo
+- **MAI** usare deepseek-v4-pro nell'Assemblea
+- **SEMPRE** Avvocato per ultimo nel dibattito (antisycophancy)
+- **SEMPRE** registrare obiezioni non risolte nel verbale
+
+---
+
+## Come Funziona
+
 ### Flusso di Esecuzione
 
 ```
@@ -28,97 +79,141 @@ Triage → Calcolo Complessità → Selezione Modalità
     ↓
 Convocazione (OdG + Task Plan)
     ↓
-Hacker ─┐
-Contabile ─┤── PARALLELO → Avvocato (asincrono, parte al primo risultato)
-Utente ──┘
+┌─ Hacker ─┐
+├─ Contabile ┤── PARALLELO → Avvocato (asincrono: parte al primo risultato)
+└─ Utente ──┘
     ↓
-Dibattito (sequenziale, max 2 giri)
+Dibattito (sequenziale, max 2 giri + controreplica Avvocato)
     ↓
 Moduli Specialistici (se attivati)
     ↓
 Lead Architect → Verbale Finale
 ```
 
-### Modelli Utilizzati
+### Fasi nel Dettaglio
 
-- **kimi-k2.7-code** (256K ctx) — Hacker: coding specialist
-- **minimax-m3** (1M ctx) — Contabile, Utente: analitico, linguaggio naturale
-- **deepseek-v4-flash** (1M ctx) — Avvocato, Lead Architect: critica e sintesi
-- **deepseek-v4-pro** (1M ctx) — Solo analisi offline, MAI in assemblea (cold start 5-10s)
+1. **Triage** — Calcolo complessità del problema, selezione automatica della modalità
+2. **Convocazione** — Stampa dell'Ordine del Giorno e Task Plan
+3. **Proposte Parallele** — Hacker, Contabile e Utente generano proposte indipendentemente. L'Avvocato parte **asincrono** non appena il primo risultato arriva
+4. **Dibattito** — 2 giri sequenziali di replica, Avvocato ultimo
+5. **Moduli Specialistici** — Attivati solo se i trigger matchano (vedi sotto)
+6. **Lead Architect** — Sintesi finale, verbale, decisione, allegato tecnico
+
+### Avvocato Asincrono
+
+Feature chiave dell'Assemblea V5: invece di attendere TUTTE le 3 proposte parallele, l'Avvocato inizia a criticare SUBITO dopo il PRIMO risultato, accumulando gli altri via continuation session (`ses_...`). Questo riduce i tempi morti del 20-30%.
 
 ---
 
 ## Triage e Modalità
 
-L'Assemblea calcola automaticamente la complessità del problema con una formula pesata:
+### Formula di Complessità
 
-| Input | Peso |
-|-------|------|
-| Parole | × 0.3 (cap a 2.0) |
-| Keyword match | × 0.5 |
-| Termini tecnici | × 0.3 |
-| Cifre numeriche | × 0.2 |
+```
+Base:     min(parole_input × 0.3, 2.0)
+Segnali:  count(keyword_match) × 0.5
+Tech:     count(API, SQL, GPU, CPU, DB, Cloud, deploy) × 0.3
+Numeri:   count(digits) × 0.2
+Totale:   min(Base + Segnali + Tech + Numeri, 10.0)
+```
 
 ### Soglie
 
-| Punteggio | Modalità | Partecipanti |
-|-----------|----------|-------------|
-| < 4 | **Light** | Hacker + Utente + Lead |
-| 4-6 | **Standard** | 5 personaggi |
-| 6-8 | **Full** | 6 + moduli specialistici |
-| > 8 | **Full + Esteso** | 6 + moduli + analisi supplementare |
-| Trigger condizionale | **Esplorazione** | Design divergente, Hacker unbound |
+| Punteggio | Modalità | Partecipanti | Timeout |
+|-----------|----------|-------------|---------|
+| < 4 | **Light** | Hacker + Utente + Lead | 60s |
+| 4-6 | **Standard** | Hacker + Contabile + Utente + Avvocato + Lead | 90s |
+| 6-8 | **Full** | Tutti e 6 + moduli specialistici | 120s |
+| > 8 | **Full + Esteso** | Tutti + moduli + analisi supplementare | 150s |
+| Trigger condizionale | **Esplorazione** | Design divergente, Hacker unbound | 120s |
 
-La **Modalità Esplorazione** si attiva con segnali di divergenza (brainstorming, esplora, pensiero laterale) E assenza di urgenza. In questa modalità l'Hacker genera idee senza limiti, l'Avvocato applica solo un survival filter (FATAL FLAW), e il Lead Architect clusterizza le idee sopravvissute.
+### Modalità Esplorazione
+
+Attivata da **segnali di divergenza** (brainstorming, esplora, pensiero laterale, blue sky) **E assenza di urgenza** (nessun crash, budget, deadline, failure).
+
+In questa modalità:
+- **Hacker** genera idee senza limiti di lunghezza, organizzate per categoria e numerate
+- **Avvocato** applica solo un **survival filter**: elimina le idee matematicamente/fisicamente/economica­mente impossibili (FATAL FLAW)
+- **Lead Architect** clusterizza le idee sopravvissute per strategia (basso rischio, sperimentali, alta complessità/alta resa)
 
 ---
 
 ## Moduli Specialistici
 
-Attivabili automaticamente in base a segnali nel problema:
+Attivazione automatica basata su segnali nel problema + soglia di complessità:
 
 | Modulo | Trigger | Funzione |
 |--------|---------|----------|
-| **The Infiltrator** | Security ≥ 2 + complessità ≥ 5 | Trova bias cognitivi e difetti argomentativi |
-| **The Time Traveler** | Scalabilità ≥ 2 + complessità ≥ 6 | Proietta impatto decisioni a 12-24 mesi |
-| **Chaos Simulator** | "failure/mission-critical" + complessità ≥ 7 | Introduce 2 guasti forzati, obbliga piano B |
+| **The Infiltrator** | ≥ 2 segnali security E complessità ≥ 5 | Identifica 3 bias cognitivi o difetti argomentativi nel dibattito |
+| **The Time Traveler** | ≥ 2 segnali scalabilità E complessità ≥ 6 | Proietta l'impatto delle decisioni a 12-24 mesi, valuta reversibilità |
+| **Chaos Simulator** | "failure/mission-critical" E complessità ≥ 7 | Introduce 2 guasti forzati e obbliga un piano B documentato |
+
+Se attivati, i moduli sono **bloccanti**: il Lead Architect non produce il verbale senza i loro output.
 
 ---
 
 ## Memoria Storica (RAG)
 
-Prima di ogni assemblea, il sistema cerca verbali precedenti su argomenti simili tramite la skill `knowledge`. Se trova risultati, li inietta nel prompt dell'Avvocato e del Lead Architect per evitare di ripetere errori già discussi.
+Prima di ogni assemblea, il Presidente cerca verbali di assemblee precedenti su argomenti simili tramite la skill `knowledge` (`explore` agent su pattern `verbale`/`assemblea`).
+
+Se trova risultati, li inietta nel prompt dell'Avvocato e del Lead Architect come:
+
+```
+--- DECISIONI PRECEDENTI (da verbali archiviati) ---
+<risultati_ricerca>
+--- FINE DECISIONI PRECEDENTI ---
+```
+
+Questo evita di dibattere soluzioni già scartate o ripetere errori già discussi.
 
 ---
 
 ## Metriche di Chiusura
 
-Alla fine di ogni assemblea vengono registrate:
+| Metrica | Descrizione |
+|---------|-------------|
+| Durata stimata | Tempo totale in minuti |
+| Turni totali | Numero di interventi |
+| Voci attive / totali | Partecipanti che hanno effettivamente parlato |
+| Obiezioni sollevate | Critiche dell'Avvocato |
+| Obiezioni non risolte | Critiche rimaste senza risposta |
+| Decisioni precedenti trovate | Memoria storica attivata |
+| Decisione finale | Accettata / Rimandata |
 
-- Durata stimata
-- Turni totali
-- Obiezioni sollevate / non risolte
-- Decisioni precedenti trovate
-- Decisione finale (Accettata / Rimandata)
-
-**Quality Gate**: se l'Avvocato solleva < 3 obiezioni, il sistema rilancia con un anti-sycophancy check. Se le obiezioni non risolte superano il 50%, la decisione è fragile.
+**Quality Gate**: se l'Avvocato solleva < 3 obiezioni → anti-sycophancy check ("Sei sicuro? Non c'è niente da criticare?"). Se obiezioni non risolte > 50% → la decisione è fragile, raccomanda rimandare.
 
 ---
 
-## Esempi d'Uso
+## Quando Usarla
 
-### Esempio 1: Problema Tecnico Complesso (Modalità Full)
+| Scenario | Assemblea V5 | Assemblea Complessa |
+|----------|-------------|---------------------|
+| Decisione veloce (< 2 minuti) | ✅ | ❌ |
+| Problema con dati numerici | ✅ | ✅ |
+| Brainstorming creativo | ✅ (modalità Esplorazione) | ❌ |
+| Scelta tecnologica | ✅ | ✅ (più approfondita) |
+| Decisione con rischio medio-alto | ✅ | ✅✅ |
+| Piano di migrazione | ✅ | ✅✅ |
+| Tracciabilità delle decisioni | ✅ | ✅✅ (mappa RRC) |
+
+> Per decisioni che richiedono **iterazione profonda** e meccanismo **Recalibrate/Reject/Concede**, usa [Assemblea Complessa](https://github.com/motusakapeppo/opencode-skill-assemblea-complessa).
+
+---
+
+## Esempi
+
+### Esempio 1: Problema Tecnico Complesso (Full)
 
 ```
 Utente: "Fai un'assemblea per progettare l'architettura del nuovo
 microservizio di autenticazione con JWT, refresh token rotation,
 e supporto multi-tenant su Kubernetes"
 
-Output: Verbale con 3 proposte Hacker, analisi costi Contabile,
-critiche Avvocato, decisione architetturale finale con allegato tecnico.
+Output: 3 proposte Hacker, analisi costi Contabile, critiche Avvocato,
+decisione architetturale finale con allegato tecnico.
 ```
 
-### Esempio 2: Decisione di Design (Modalità Standard)
+### Esempio 2: Decisione di Design (Standard)
 
 ```
 Utente: "Dibattito: usiamo PostgreSQL o MongoDB per il nuovo
@@ -134,34 +229,28 @@ Utente: "Brainstorming senza limiti: come potremmo riscrivere
 da zero l'intero sistema di routing dei messaggi?"
 
 Output: Decine di idee categorizzate, filtrate per impossibilità,
-clusterizzate per strategia.
+clusterizzate per strategia strategica.
 ```
 
 ---
 
 ## Fallback Python
 
-`debate_orchestrator.py` è uno script Python standalone che esegue l'Assemblea via chiamate dirette all'API cloud (senza OpenCode). Non supporta parallelismo reale né la modalità Esplorazione.
+`debate_orchestrator.py` è uno script Python standalone per ambienti **senza OpenCode**. Esegue l'Assemblea via chiamate dirette API cloud. **Non supporta** parallelismo reale né la modalità Esplorazione.
 
 ```bash
-# Prerequisito: impostare la variabile d'ambiente
+# Prerequisito
 export OLLAMA_API_KEY="la-tua-chiave"
 
-# Esecuzione
-python debate_orchestrator.py "Progetta l'architettura per un sistema di caching distribuito" --timeout 60
+# Uso base
+python debate_orchestrator.py "Progetta un sistema di caching distribuito"
 
-# Con contesto di codice
-python debate_orchestrator.py "Refactoring del modulo auth" --code src/auth/service.py
+# Con timeout personalizzato
+python debate_orchestrator.py "Refactoring del modulo auth" --timeout 90
+
+# Con contesto di codice (auto-slimming)
+python debate_orchestrator.py "Analizza il codice" --code src/auth/service.py
 ```
-
----
-
-## Requisiti
-
-- **Python 3.10+** (per il fallback)
-- **OpenCode** (OhMyOpenCode) con configurazione cloud per l'uso principale
-- **Variabile d'ambiente** `OLLAMA_API_KEY` per il fallback Python
-- Modelli cloud accessibili: kimi-k2.7-code, minimax-m3, deepseek-v4-flash
 
 ---
 
@@ -169,21 +258,30 @@ python debate_orchestrator.py "Refactoring del modulo auth" --code src/auth/serv
 
 ```
 opencode-skill-assemblea/
-├── README.md                          # Questo file
-├── SKILL.md                           # Skill definition (frontmatter YAML + body)
-├── debate_orchestrator.py             # Fallback Python (standalone)
-├── proiezione_24mesi_time_traveler.md # Esempio di output del modulo Time Traveler
+├── README.md                               # Documentazione
+├── SKILL.md                                # Skill definition OpenCode
+├── debate_orchestrator.py                  # Fallback Python standalone
+├── proiezione_24mesi_time_traveler.md      # Esempio di output Time Traveler
 └── .gitignore
 ```
 
 ---
 
-## Limitazioni Note
+## Requisiti
 
-1. Il fallback Python è **sequenziale**, non parallelo — i 3 personaggi partono uno dopo l'altro
-2. La modalità Esplorazione è disponibile **solo su OpenCode**, non nel fallback Python
-3. deepseek-v4-pro è esplicitamente bandito dall'Assemblea (cold start troppo lento)
-4. I modelli locali non supportano dibattiti di qualità — sempre usare modelli cloud
+- **OpenCode** (OhMyOpenCode) — per l'uso principale via sub-agenti cloud
+- **Python 3.10+** — solo per il fallback standalone
+- **Variabile d'ambiente** `OLLAMA_API_KEY` — solo per il fallback standalone
+- **Modelli cloud**: kimi-k2.7-code, minimax-m3, deepseek-v4-flash
+
+---
+
+## Limitazioni
+
+1. **Fallback Python sequenziale** — i 3 personaggi partono uno dopo l'altro, non in parallelo. 2-3× più lento dell'esecuzione OpenCode nativa.
+2. **Modalità Esplorazione solo su OpenCode** — non disponibile nel fallback Python.
+3. **deepseek-v4-pro escluso** — cold start 5-10s, distruttivo per l'interattività.
+4. **Niente modelli locali** — i modelli locali (Qwen, Gemma, Llama) non producono dibattiti di qualità. Usare solo cloud.
 
 ---
 
